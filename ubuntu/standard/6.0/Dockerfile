@@ -19,16 +19,12 @@ RUN set -ex \
     && apt install -y -qq apt-transport-https gnupg ca-certificates \
     && apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 3FA7E0328081BFF6A14DA29AA6A19B38D3D831EF \
     && apt-get install software-properties-common -y -qq --no-install-recommends \
-    && apt-add-repository -y ppa:git-core/ppa \
-    && apt-get update \
-    && apt-get install git=1:2.* -y -qq --no-install-recommends \
-    && git version \
     && apt-get install -y -qq --no-install-recommends openssh-client \
     && mkdir ~/.ssh \
     && mkdir -p /codebuild/image/config \
     && touch ~/.ssh/known_hosts \
-    && ssh-keyscan -t rsa,dsa -H github.com >> ~/.ssh/known_hosts \
-    && ssh-keyscan -t rsa,dsa -H bitbucket.org >> ~/.ssh/known_hosts \
+    && ssh-keyscan -t rsa,dsa,ed25519,ecdsa -H github.com >> ~/.ssh/known_hosts \
+    && ssh-keyscan -t rsa,dsa,ed25519,ecdsa -H bitbucket.org >> ~/.ssh/known_hosts \
     && chmod 600 ~/.ssh/known_hosts \
     && apt-get install -y -qq --no-install-recommends \
           apt-utils asciidoc autoconf automake build-essential bzip2 \
@@ -60,12 +56,25 @@ RUN useradd codebuild-user
 
 FROM core AS tools
 
+# Install Git
+RUN set -ex \
+   && GIT_VERSION=2.43.2 \
+   && GIT_TAR_FILE=git-$GIT_VERSION.tar.gz \
+   && GIT_SRC=https://github.com/git/git/archive/v${GIT_VERSION}.tar.gz  \
+   && curl -L -o $GIT_TAR_FILE $GIT_SRC \
+   && tar zxf $GIT_TAR_FILE \
+   && cd git-$GIT_VERSION \
+   && make -j4 \
+   && make install prefix=/usr \
+   && cd .. && rm -rf git-$GIT_VERSION \
+   && rm -rf $GIT_TAR_FILE /tmp/*
+
 # Install stunnel
 RUN set -ex \
-   && STUNNEL_VERSION=5.64 \
+   && STUNNEL_VERSION=5.69 \
    && STUNNEL_TAR=stunnel-$STUNNEL_VERSION.tar.gz \
-   && STUNNEL_SHA256="eebe53ed116ba43b2e786762b0c2b91511e7b74857ad4765824e7199e6faf883" \
-   && curl -o $STUNNEL_TAR https://www.usenix.org.uk/mirrors/stunnel/archive/5.x/$STUNNEL_TAR && echo "$STUNNEL_SHA256 $STUNNEL_TAR" | sha256sum --check && tar xfz $STUNNEL_TAR \
+   && STUNNEL_SHA256="1ff7d9f30884c75b98c8a0a4e1534fa79adcada2322635e6787337b4e38fdb81" \
+   && curl -o $STUNNEL_TAR https://www.stunnel.org/archive/5.x/$STUNNEL_TAR && echo "$STUNNEL_SHA256 $STUNNEL_TAR" | sha256sum --check && tar xfz $STUNNEL_TAR \
    && cd stunnel-$STUNNEL_VERSION \
    && ./configure \
    && make -j4 \
@@ -125,7 +134,7 @@ RUN set -ex \
     && sh $RUBY_BUILD_SRC_DIR/install.sh
 
 #python
-RUN curl https://pyenv.run | bash
+RUN curl -s -S -L https://raw.githubusercontent.com/pyenv/pyenv-installer/master/bin/pyenv-installer | bash
 ENV PATH="/root/.pyenv/shims:/root/.pyenv/bin:$PATH"
 
 #php
@@ -143,7 +152,7 @@ FROM tools AS runtimes
 
 #****************     .NET-CORE     *******************************************************
 
-ENV DOTNET_6_SDK_VERSION="6.0.301"
+ENV DOTNET_6_SDK_VERSION="6.0.419"
 ENV DOTNET_ROOT="/root/.dotnet"
 
 # Add .NET Core 6 Global Tools install folder to PATH
@@ -163,9 +172,9 @@ RUN set -ex \
 
 # Install Powershell Core
 # See instructions at https://docs.microsoft.com/en-us/powershell/scripting/setup/installing-powershell-core-on-linux
-ARG POWERSHELL_VERSION=7.2.4
+ARG POWERSHELL_VERSION=7.2.11
 ARG POWERSHELL_DOWNLOAD_URL=https://github.com/PowerShell/PowerShell/releases/download/v$POWERSHELL_VERSION/powershell-$POWERSHELL_VERSION-linux-x64.tar.gz
-ARG POWERSHELL_DOWNLOAD_SHA=935B874A2E5F5662AB23EFBE7392DC96C27D4FD064041D28A25A487EC5F6CC2E
+ARG POWERSHELL_DOWNLOAD_SHA=9D6F798461D172391B508FCF27F9CBBB4BEF307EBFD6886ED50860C322C7D1B3
 
 RUN set -ex \
     && curl -SL $POWERSHELL_DOWNLOAD_URL --output powershell.tar.gz \
@@ -179,7 +188,7 @@ RUN set -ex \
 
 #****************      NODEJS     ****************************************************
 
-ENV NODE_16_VERSION="16.15.1"
+ENV NODE_16_VERSION="16.20.1"
 
 RUN  n $NODE_16_VERSION && npm install --save-dev -g -f grunt && npm install --save-dev -g -f grunt-cli && npm install --save-dev -g -f webpack \
      && curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - \
@@ -192,7 +201,7 @@ RUN  n $NODE_16_VERSION && npm install --save-dev -g -f grunt && npm install --s
 
 #**************** RUBY *********************************************************
 
-ENV RUBY_31_VERSION="3.1.2"
+ENV RUBY_31_VERSION="3.1.4"
 
 RUN rbenv install $RUBY_31_VERSION && rm -rf /tmp/* \
     && rbenv global $RUBY_31_VERSION && ruby -v
@@ -200,9 +209,9 @@ RUN rbenv install $RUBY_31_VERSION && rm -rf /tmp/* \
 #**************** END RUBY *****************************************************
 
 #**************** PYTHON *****************************************************
-ENV PYTHON_310_VERSION="3.10.5"
+ENV PYTHON_310_VERSION="3.10.12"
 
-ARG PYTHON_PIP_VERSION=22.1.2
+ARG PYTHON_PIP_VERSION=22.3.1
 ENV PYYAML_VERSION=5.4.1
 
 COPY tools/runtime_configs/python/$PYTHON_310_VERSION /root/.pyenv/plugins/python-build/share/python-build/$PYTHON_310_VERSION
@@ -210,13 +219,15 @@ RUN   env PYTHON_CONFIGURE_OPTS="--enable-shared" pyenv install $PYTHON_310_VERS
 RUN   pyenv global  $PYTHON_310_VERSION
 RUN set -ex \
     && pip3 install --no-cache-dir --upgrade --force-reinstall "pip==$PYTHON_PIP_VERSION" \
-    && pip3 install --no-cache-dir --upgrade "PyYAML==$PYYAML_VERSION" \
-    && pip3 install --no-cache-dir --upgrade 'setuptools==62.6.0' wheel aws-sam-cli boto3 pipenv virtualenv
+    && pip3 install wheel \
+    && pip3 install --no-build-isolation "Cython<3" "PyYAML==$PYYAML_VERSION" \
+    && pip3 install --no-cache-dir --upgrade 'setuptools==62.6.0' aws-sam-cli boto3 pipenv virtualenv \
+    && pip3 uninstall cython --yes
 
 #**************** END PYTHON *****************************************************
 
 #****************      PHP     ****************************************************
-ENV PHP_81_VERSION="8.1.6"
+ENV PHP_81_VERSION="8.1.20"
 
 COPY tools/runtime_configs/php/$PHP_81_VERSION /root/.phpenv/plugins/php-build/share/php-build/definitions/$PHP_81_VERSION
 RUN phpenv install $PHP_81_VERSION && rm -rf /tmp/* && phpenv global $PHP_81_VERSION
@@ -227,7 +238,7 @@ RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/bin -
 #****************      END PHP     ****************************************************
 
 #****************     GOLANG     ****************************************************
-ENV GOLANG_18_VERSION="1.18.3"
+ENV GOLANG_18_VERSION="1.18.10"
 
 RUN goenv install $GOLANG_18_VERSION && rm -rf /tmp/* && \
     goenv global  $GOLANG_18_VERSION && \
@@ -244,17 +255,17 @@ FROM runtimes AS runtimes_n_corretto
 ENV JAVA_17_HOME="/usr/lib/jvm/java-17-amazon-corretto" \
     JDK_17_HOME="/usr/lib/jvm/java-17-amazon-corretto" \
     JRE_17_HOME="/usr/lib/jvm/java-17-amazon-corretto"
-ARG ANT_VERSION=1.10.12
+ARG ANT_VERSION=1.10.13
 ARG MAVEN_HOME="/opt/maven"
-ARG MAVEN_VERSION=3.8.6
-ARG INSTALLED_GRADLE_VERSIONS="7.4.2"
-ARG GRADLE_VERSION=7.4.2
-ARG SBT_VERSION=1.6.2
+ARG MAVEN_VERSION=3.9.2
+ARG INSTALLED_GRADLE_VERSIONS="7.6.1"
+ARG GRADLE_VERSION=7.6.1
+ARG SBT_VERSION=1.8.3
 ARG GRADLE_PATH="$SRC_DIR/gradle"
-ARG ANT_DOWNLOAD_SHA512="2287dc5cfc21043c14e5413f9afb1c87c9f266ec2a9ba2d3bf2285446f6e4ccb59b558bf2e5c57911a05dfa293c7d5c7ad60ac9f744ba11406f4e6f9a27b2403"
-ARG MAVEN_DOWNLOAD_SHA512="f790857f3b1f90ae8d16281f902c689e4f136ebe584aba45e4b1fa66c80cba826d3e0e52fdd04ed44b4c66f6d3fe3584a057c26dfcac544a60b301e6d0f91c26"
-ARG GRADLE_DOWNLOADS_SHA256="e6d864e3b5bc05cc62041842b306383fc1fefcec359e70cebb1d470a6094ca82 7.4.2"
-ARG SBT_DOWNLOAD_SHA256="637637b6c4e6fa04ab62cd364061e32b12480b09001cd23303df62b36fadd440"
+ARG ANT_DOWNLOAD_SHA512="de4ac604629e39a86a306f0541adb3775596909ad92feb8b7de759b1b286417db24f557228737c8b902d6abf722d2ce5bb0c3baa3640cbeec3481e15ab1958c9"
+ARG MAVEN_DOWNLOAD_SHA512="900bdeeeae550d2d2b3920fe0e00e41b0069f32c019d566465015bdd1b3866395cbe016e22d95d25d51d3a5e614af2c83ec9b282d73309f644859bbad08b63db"
+ARG GRADLE_DOWNLOADS_SHA256="518a863631feb7452b8f1b3dc2aaee5f388355cc3421bbd0275fbeadd77e84b2 7.6.1"
+ARG SBT_DOWNLOAD_SHA256="21F4210786FD68FD15DCA3F4C8EE9CAE0DB249C54E1B0EF6E829E9FA4936423A"
 ENV LOG4J_UNSAFE_VERSIONS="2.11.1 1.2.8"
 
 ARG MAVEN_CONFIG_HOME="/root/.m2"
@@ -267,10 +278,10 @@ ENV PATH="${PATH}:/opt/tools"
 
 RUN set -ex \
     && apt-get update \
-    && apt-get install -y -qq software-properties-common apt-utils \
+    && apt-get install -y -qq software-properties-common apt-utils sudo \
     # Install Corretto 17
-    && wget -qO- https://apt.corretto.aws/corretto.key | apt-key add - \
-    && add-apt-repository 'deb https://apt.corretto.aws stable main' \
+    && wget -O - https://apt.corretto.aws/corretto.key | sudo gpg --dearmor -o /usr/share/keyrings/corretto-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/corretto-keyring.gpg] https://apt.corretto.aws stable main" | sudo tee /etc/apt/sources.list.d/corretto.list \
     && apt-get update \
     && apt-get install -y -qq java-17-amazon-corretto-jdk \
     && apt-get install -y -qq --no-install-recommends ca-certificates-java \
@@ -294,7 +305,7 @@ RUN set -ex \
 RUN set -ex \
     # Install Maven
     && mkdir -p $MAVEN_HOME \
-    && curl -LSso /var/tmp/apache-maven-$MAVEN_VERSION-bin.tar.gz https://apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz \
+    && curl -LSso /var/tmp/apache-maven-$MAVEN_VERSION-bin.tar.gz https://archive.apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz \
     && echo "$MAVEN_DOWNLOAD_SHA512 /var/tmp/apache-maven-$MAVEN_VERSION-bin.tar.gz" | sha512sum -c - \
     && tar xzf /var/tmp/apache-maven-$MAVEN_VERSION-bin.tar.gz -C $MAVEN_HOME --strip-components=1 \
     && rm /var/tmp/apache-maven-$MAVEN_VERSION-bin.tar.gz \
@@ -337,11 +348,12 @@ RUN rm -fr /var/lib/apt/lists/* /tmp/* /var/tmp/* \
 ARG DOCKER_BUCKET="download.docker.com"
 ARG DOCKER_CHANNEL="stable"
 ARG DIND_COMMIT="3b5fac462d21ca164b3778647420016315289034"
-ARG DOCKER_COMPOSE_VERSION="2.6.0"
+ARG DOCKER_COMPOSE_VERSION="2.17.3"
+ARG DOCKER_BUILDX_VERSION="0.11.0"
 ARG SRC_DIR="/usr/src"
 
-ARG DOCKER_SHA256="969210917b5548621a2b541caf00f86cc6963c6cf0fb13265b9731c3b98974d9"
-ARG DOCKER_VERSION="20.10.17"
+ARG DOCKER_SHA256="AB91092320A87691A1EAF0225B48585DB9C69CFF0ED4B0F569F744FF765515E3"
+ARG DOCKER_VERSION="20.10.24"
 
 # Install Docker
 RUN set -ex \
@@ -350,6 +362,11 @@ RUN set -ex \
     && tar --extract --file docker.tgz --strip-components 1  --directory /usr/local/bin/ \
     && rm docker.tgz \
     && docker -v \
+    # replace runc package to resolve CVE-2024-21626
+    && apt-get update && apt-get -y install runc \
+    && rm -f /usr/local/bin/runc \
+    && ln -s /usr/sbin/runc /usr/local/bin/runc \
+    && runc -v \
     # set up subuid/subgid so that "--userns-remap=default" works out-of-the-box
     && addgroup dockremap \
     && useradd -g dockremap dockremap \
@@ -359,7 +376,14 @@ RUN set -ex \
     && curl -L https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-Linux-x86_64 > /usr/local/bin/docker-compose \
     && chmod +x /usr/local/bin/dind /usr/local/bin/docker-compose \
     # Ensure docker-compose works
-    && docker-compose version
+    && docker-compose version \
+    && mkdir -p /usr/local/lib/docker/cli-plugins \
+    && curl -L https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.linux-amd64 -o /usr/local/lib/docker/cli-plugins/docker-buildx \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx \
+    && ln -s /usr/local/lib/docker/cli-plugins/docker-buildx /usr/local/bin/docker-buildx \
+    # Ensure docker-buildx works
+    && docker-buildx version \
+    && docker buildx version
 
 VOLUME /var/lib/docker
 #*********************** END  DOCKER  ****************************
